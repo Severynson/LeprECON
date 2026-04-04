@@ -1,0 +1,52 @@
+experiment:
+  name: default_train
+  seed: 42
+
+data:
+  processed_dataset_path: data/preprocessed/v1.csv
+  train_split:
+    start_date: 2018-10-01
+    end_date: 2024-12-31
+  test_split:
+    start_date: 2025-01-01
+    end_date: 2025-12-31
+
+features:
+  include_news_embeddings: true
+  include_returns: true
+  include_technical_indicators: true
+  include_macro_features: false
+  no_news_strategy: zero_vector_with_indicator
+  sequence_lengths: [5, 10, 20]
+
+text_encoder:
+  model_name: yiyanghkust/finbert-tone
+  encoder_family: finbert
+  frozen: true
+  pooling: mean
+  allow_future_fine_tuning: true
+
+targets:
+  regression: next_day_close
+  classification: next_day_direction
+
+models:
+  baselines:
+    - arima
+    - linear_regression
+    - logistic_regression
+  sequence_models:
+    - transformer
+    - lstm
+  ablations:
+    drop_news_embeddings: true
+
+evaluation:
+  strategy: final_holdout
+  classification_metrics: [accuracy, f1, roc_auc]
+  regression_metrics: [mae, rmse, r2]
+
+artifacts:
+  model_dir: artifacts/models
+  reports_dir: artifacts/reports
+  plots_dir: artifacts/plots
