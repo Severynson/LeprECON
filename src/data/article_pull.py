@@ -17,7 +17,7 @@ import requests
 API_URL = "https://api.nytimes.com/svc/search/v2/articlesearch.json"
 ARCHIVE_API_URL_TEMPLATE = "https://api.nytimes.com/svc/archive/v1/{year}/{month}.json"
 DEFAULT_QUERY = ""
-DEFAULT_START_DATE = "2018-10-01"
+DEFAULT_START_DATE = "2015-01-01"
 DEFAULT_OUTPUT_PATH = "data/news_raw/new_york_times.tsv"
 DEFAULT_CHECKPOINT_PATH = "data/news_raw/new_york_times.checkpoint.json"
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -47,6 +47,11 @@ FIELDNAMES = [
 class PullCheckpoint:
     current_date: str
     next_page: int
+    mode: str = ""
+    query: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    output_path: str = ""
 
 
 def load_env_value(key: str, env_path: str = ".env") -> str | None:
@@ -136,6 +141,27 @@ def extract_article_row(doc: dict[str, Any], query: str) -> dict[str, str]:
     }
 
 
+def build_dedup_key(row: dict[str, str]) -> str | None:
+    article_id = normalize_text(row.get("article_id"))
+    if article_id:
+        return f"id:{article_id}"
+
+    web_url = normalize_text(row.get("web_url"))
+    if web_url:
+        return f"url:{web_url}"
+
+    published_at = normalize_text(row.get("published_at"))
+    headline = normalize_text(row.get("headline"))
+    if published_at and headline:
+        return f"published_headline:{published_at}|{headline}"
+
+    article_day = normalize_text(row.get("article_day"))
+    if article_day and headline:
+        return f"day_headline:{article_day}|{headline}"
+
+    return None
+
+
 def format_nyt_date(value: date) -> str:
     return value.strftime("%Y%m%d")
 
@@ -175,18 +201,18 @@ def iter_month_starts(start_date: str, end_date: str) -> list[date]:
     return months
 
 
-def read_existing_article_ids(output_path: Path) -> set[str]:
+def read_existing_article_keys(output_path: Path) -> set[str]:
     if not output_path.exists():
         return set()
 
-    seen_ids: set[str] = set()
+    seen_keys: set[str] = set()
     with output_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         for row in reader:
-            article_id = row.get("article_id", "")
-            if article_id:
-                seen_ids.add(article_id)
-    return seen_ids
+            dedup_key = build_dedup_key({k: v or "" for k, v in row.items()})
+            if dedup_key:
+                seen_keys.add(dedup_key)
+    return seen_keys
 
 
 def ensure_output_writer(output_path: Path) -> csv.DictWriter:
@@ -215,14 +241,52 @@ def load_checkpoint(checkpoint_path: Path) -> PullCheckpoint | None:
     return PullCheckpoint(
         current_date=payload["current_date"],
         next_page=int(payload["next_page"]),
+        mode=payload.get("mode", ""),
+        query=payload.get("query", ""),
+        start_date=payload.get("start_date", ""),
+        end_date=payload.get("end_date", ""),
+        output_path=payload.get("output_path", ""),
     )
 
 
-def write_checkpoint(checkpoint_path: Path, current_date: str, next_page: int) -> None:
+def checkpoint_matches_run(
+    checkpoint: PullCheckpoint,
+    *,
+    mode: str,
+    query: str,
+    start_date: str,
+    end_date: str,
+    output_path: str,
+) -> bool:
+    return (
+        checkpoint.mode == mode
+        and checkpoint.query == normalize_text(query)
+        and checkpoint.start_date == start_date
+        and checkpoint.end_date == end_date
+        and checkpoint.output_path == output_path
+    )
+
+
+def write_checkpoint(
+    checkpoint_path: Path,
+    *,
+    current_date: str,
+    next_page: int,
+    mode: str,
+    query: str,
+    start_date: str,
+    end_date: str,
+    output_path: str,
+) -> None:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "current_date": current_date,
         "next_page": next_page,
+        "mode": mode,
+        "query": normalize_text(query),
+        "start_date": start_date,
+        "end_date": end_date,
+        "output_path": output_path,
         "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
     checkpoint_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -398,10 +462,24 @@ def pull_articles(
 ) -> int:
     output = Path(output_path)
     checkpoint = Path(checkpoint_path)
-    seen_ids = read_existing_article_ids(output)
+    seen_keys = read_existing_article_keys(output)
     writer = ensure_output_writer(output)
 
     checkpoint_state = load_checkpoint(checkpoint)
+    if checkpoint_state and not checkpoint_matches_run(
+        checkpoint_state,
+        mode=mode,
+        query=query,
+        start_date=start_date,
+        end_date=end_date,
+        output_path=output_path,
+    ):
+        log(
+            "Ignoring checkpoint due to run parameter mismatch "
+            f"checkpoint_date={checkpoint_state.current_date}"
+        )
+        checkpoint_state = None
+        clear_checkpoint(checkpoint)
     session = requests.Session()
     rows_written = 0
     resume_started = checkpoint_state is None
@@ -460,7 +538,16 @@ def pull_articles(
                     log(
                         f"No archive articles found for month={month_cursor} empty_months_so_far={empty_units}"
                     )
-                    write_checkpoint(checkpoint, current_date=month_cursor, next_page=0)
+                    write_checkpoint(
+                        checkpoint,
+                        current_date=month_cursor,
+                        next_page=0,
+                        mode=mode,
+                        query=query,
+                        start_date=start_date,
+                        end_date=end_date,
+                        output_path=output_path,
+                    )
                     continue
 
                 for doc in docs:
@@ -469,18 +556,27 @@ def pull_articles(
                     if not is_date_in_range(article_day, start_date, end_date):
                         continue
 
-                    article_id = row["article_id"]
-                    if article_id and article_id in seen_ids:
+                    dedup_key = build_dedup_key(row)
+                    if dedup_key and dedup_key in seen_keys:
                         continue
 
                     writer.writerow(row)
                     writer._output_handle.flush()  # type: ignore[attr-defined]
-                    if article_id:
-                        seen_ids.add(article_id)
+                    if dedup_key:
+                        seen_keys.add(dedup_key)
                     rows_written += 1
                     month_rows_written += 1
 
-                write_checkpoint(checkpoint, current_date=month_cursor, next_page=0)
+                write_checkpoint(
+                    checkpoint,
+                    current_date=month_cursor,
+                    next_page=0,
+                    mode=mode,
+                    query=query,
+                    start_date=start_date,
+                    end_date=end_date,
+                    output_path=output_path,
+                )
                 log(
                     f"Finished month={month_cursor} month_rows_written={month_rows_written} "
                     f"processed_months={processed_units} total_rows_written={rows_written}"
@@ -537,26 +633,42 @@ def pull_articles(
 
                     for doc in docs:
                         row = extract_article_row(doc, query)
-                        article_id = row["article_id"]
-                        if article_id and article_id in seen_ids:
+                        dedup_key = build_dedup_key(row)
+                        if dedup_key and dedup_key in seen_keys:
                             continue
 
                         writer.writerow(row)
                         writer._output_handle.flush()  # type: ignore[attr-defined]
-                        if article_id:
-                            seen_ids.add(article_id)
+                        if dedup_key:
+                            seen_keys.add(dedup_key)
                         rows_written += 1
                         day_rows_written += 1
 
                     write_checkpoint(
-                        checkpoint, current_date=day_iso, next_page=page + 1
+                        checkpoint,
+                        current_date=day_iso,
+                        next_page=page + 1,
+                        mode=mode,
+                        query=query,
+                        start_date=start_date,
+                        end_date=end_date,
+                        output_path=output_path,
                     )
                     log(
                         f"Checkpoint saved day={day_iso} next_page={page + 1} "
                         f"day_rows_written={day_rows_written} total_rows_written={rows_written}"
                     )
 
-                write_checkpoint(checkpoint, current_date=day_iso, next_page=0)
+                write_checkpoint(
+                    checkpoint,
+                    current_date=day_iso,
+                    next_page=0,
+                    mode=mode,
+                    query=query,
+                    start_date=start_date,
+                    end_date=end_date,
+                    output_path=output_path,
+                )
                 log(
                     f"Finished day={day_iso} day_rows_written={day_rows_written} "
                     f"processed_days={processed_units} total_rows_written={rows_written}"
