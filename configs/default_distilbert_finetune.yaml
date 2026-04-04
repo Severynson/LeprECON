@@ -1,0 +1,34 @@
+run:
+  name: default_distilbert_finetune
+  seed: 42
+  limit: 0
+  use_mps: false
+
+data:
+  raw_articles_path: data/news_raw/new_york_times.tsv
+  label_cache_path: data/news_preprocessed/gemini_label_cache.jsonl
+  exclude_labeling_failures: true
+  train_ratio: 0.8
+  max_text_chars: 1000
+
+model:
+  pretrained: distilbert-base-uncased
+  num_labels: 2
+  max_length: 512
+  use_fast_tokenizer: false
+  local_files_only: false
+
+training:
+  epochs: 3
+  batch_size: 32
+  dataloader_workers: 0
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  gradient_accumulation_steps: 1
+
+artifacts:
+  model_dir: artifacts/models/distilbert_relevance
+  report_path: artifacts/reports/distilbert_finetune_report.json
+  hf_cache_dir: artifacts/huggingface_cache
+  env_file: .env

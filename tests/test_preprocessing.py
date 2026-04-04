@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
 from pathlib import Path
 
 import pytest
 
-# The module lives under "src/data fetch/" (space in dir name),
-# so we load it via importlib rather than a normal import.
-_MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "data fetch" / "preprocessing.py"
-_spec = importlib.util.spec_from_file_location("preprocessing", _MODULE_PATH)
-preprocessing = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(preprocessing)
+# Add src to path so we can import the package
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.dataset_generation import preprocessing
 
 # Pull names into the test namespace for convenience.
 normalize_text = preprocessing.normalize_text
@@ -294,3 +291,53 @@ def test_interpolation_adds_row_for_calendar_gap():
     # Result should be sorted: 01, 02 (synthetic), 03
     days = [r["article_day"] for r in result]
     assert days == ["2023-01-01", "2023-01-02", "2023-01-03"]
+
+
+def test_run_pipeline_reuses_prepared_rows(tmp_path: Path, monkeypatch):
+    input_path = tmp_path / "input.tsv"
+    header = "\t".join(preprocessing.INPUT_FIELDNAMES)
+    row_vals = [
+        "nyt://1", "new_york_times", "", "2023-01-10", "2023-01-10T08:00:00+0000",
+        "Headline A", "Body A", "", "", "", "Business", "", "https://nyt.com/a", "economy",
+    ]
+    input_path.write_text(
+        header + "\n" + "\t".join(row_vals) + "\n",
+        encoding="utf-8",
+    )
+
+    prepared_path = tmp_path / "prepared.tsv"
+    state_path = tmp_path / "state.json"
+    output_path = tmp_path / "output.tsv"
+    report_path = tmp_path / "report.json"
+
+    cfg = {
+        "run": {"name": "test", "dry_run": True, "limit": 0, "reuse_prepared_rows": True},
+        "paths": {
+            "input": str(input_path),
+            "output": str(output_path),
+            "report": str(report_path),
+            "label_cache": str(tmp_path / "cache.jsonl"),
+            "prepared_rows": str(prepared_path),
+            "run_state": str(state_path),
+            "env_file": str(tmp_path / ".env"),
+        },
+        "gemini": {
+            "model": "gemini-2.0-flash",
+            "batch_size": 25,
+            "max_text_chars": 2000,
+        },
+    }
+
+    preprocessing.run_pipeline(cfg)
+    assert prepared_path.exists()
+    assert state_path.exists()
+
+    original_read_tsv = preprocessing.read_tsv
+
+    def guarded_read_tsv(path: str):
+        if path == str(input_path):
+            raise AssertionError("raw input should not be re-read when prepared rows are reusable")
+        return original_read_tsv(path)
+
+    monkeypatch.setattr(preprocessing, "read_tsv", guarded_read_tsv)
+    preprocessing.run_pipeline(cfg)

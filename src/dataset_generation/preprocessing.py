@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import time
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,18 @@ def read_tsv(path: str) -> list[dict[str, str]]:
         for row in reader:
             rows.append({k: (v or "") for k, v in row.items()})
     return rows
+
+
+def write_tsv(rows: list[dict[str, str]], path: str, *, fieldnames: list[str]) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(
+            fh, fieldnames=fieldnames, delimiter="\t", extrasaction="ignore"
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +241,42 @@ def append_cache_entries(cache_path: str, entries: list[dict[str, Any]]) -> None
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+# -- Run state -------------------------------------------------------------
+
+def _build_run_signature(
+    *,
+    input_path: str,
+    model: str,
+    max_text_chars: int,
+    limit: int,
+) -> str:
+    p = Path(input_path)
+    stat = p.stat()
+    payload = (
+        f"input={p.resolve()}|size={stat.st_size}|mtime={int(stat.st_mtime)}|"
+        f"model={model}|max_text_chars={max_text_chars}|limit={limit}"
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def load_run_state(state_path: str) -> dict[str, Any]:
+    p = Path(state_path)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def write_run_state(state_path: str, payload: dict[str, Any]) -> None:
+    p = Path(state_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(p)
+
+
 # -- Gemini API wrapper ----------------------------------------------------
 
 def _call_gemini(
@@ -326,6 +375,8 @@ def run_gemini_labeling(
     batch_size: int,
     max_text_chars: int,
     cache_path: str,
+    state_path: str,
+    run_signature: str,
 ) -> tuple[list[dict[str, str]], int, int, int]:
     """Attach label columns to every row.
 
@@ -352,6 +403,12 @@ def run_gemini_labeling(
             unlabeled_indices.append(i)
 
     log(f"Labels from cache: {cached_count}, to label via API: {len(unlabeled_indices)}")
+
+    state = load_run_state(state_path)
+    last_labeled_from_api = 0
+    if state.get("run_signature") == run_signature:
+        last_labeled_from_api = int(state.get("api_labeled_so_far", 0))
+    log(f"Resume state: api_labeled_so_far={last_labeled_from_api}")
 
     # Process unlabeled in batches
     for batch_start in range(0, len(unlabeled_indices), batch_size):
@@ -392,7 +449,25 @@ def run_gemini_labeling(
         append_cache_entries(cache_path, new_cache_entries)
 
         done = min(batch_start + batch_size, len(unlabeled_indices))
+        state = {
+            **state,
+            "run_signature": run_signature,
+            "api_labeled_so_far": done,
+            "remaining_unlabeled": len(unlabeled_indices) - done,
+            "updated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        write_run_state(state_path, state)
         log(f"Labeled {done}/{len(unlabeled_indices)} rows")
+
+    state = {
+        **state,
+        "run_signature": run_signature,
+        "api_labeled_so_far": len(unlabeled_indices),
+        "remaining_unlabeled": 0,
+        "updated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "completed": True,
+    }
+    write_run_state(state_path, state)
 
     return rows, cached_count, api_count, failure_count
 
@@ -491,14 +566,7 @@ def interpolate_missing_days(
 # ---------------------------------------------------------------------------
 
 def write_output_tsv(rows: list[dict[str, str]], path: str) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=OUTPUT_FIELDNAMES, delimiter="\t",
-                                extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    write_tsv(rows, path, fieldnames=OUTPUT_FIELDNAMES)
 
 
 def write_report(path: str, report: dict[str, Any]) -> None:
@@ -561,7 +629,14 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
     output_path: str = paths_cfg.get("output", "data/news_processed/new_york_times_preprocessed.tsv")
     report_path: str = paths_cfg.get("report", "data/news_processed/preprocessing_report.json")
     cache_path: str = paths_cfg.get("label_cache", "data/news_processed/gemini_label_cache.jsonl")
+    prepared_path: str = paths_cfg.get(
+        "prepared_rows", "data/news_preprocessed/new_york_times_prepared.tsv"
+    )
+    state_path: str = paths_cfg.get(
+        "run_state", "data/news_preprocessed/preprocessing_state.json"
+    )
     env_path: str = paths_cfg.get("env_file", ".env")
+    reuse_prepared: bool = run_cfg.get("reuse_prepared_rows", True)
 
     model: str = gemini_cfg.get("model", "gemini-2.0-flash")
     batch_size: int = gemini_cfg.get("batch_size", 25)
@@ -569,20 +644,61 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
 
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # 1. Read
-    log(f"Reading {input_path}")
-    rows = read_tsv(input_path)
-    input_rows = len(rows)
-    log(f"Read {input_rows} rows")
+    run_signature = _build_run_signature(
+        input_path=input_path,
+        model=model,
+        max_text_chars=max_text_chars,
+        limit=limit,
+    )
 
-    # 2. Deduplicate
-    rows, removals = deduplicate(rows)
-    dups_total = sum(removals.values())
-    log(f"After dedup: {len(rows)} rows ({dups_total} duplicates removed)")
+    prepared_meta: dict[str, Any] = {}
+    prepared_rows_path = Path(prepared_path)
+    state = load_run_state(state_path)
+    can_reuse_prepared = (
+        reuse_prepared
+        and prepared_rows_path.exists()
+        and state.get("prepared_run_signature") == run_signature
+    )
 
-    # 3. Sort
-    rows, invalid_dates = sort_rows(rows)
-    log(f"Sorted. Invalid article_day count: {invalid_dates}")
+    if can_reuse_prepared:
+        log(f"Reusing prepared rows from {prepared_path}")
+        rows = read_tsv(prepared_path)
+        input_rows = int(state.get("input_rows", len(rows)))
+        removals = state.get(
+            "duplicates_removed_by_key_type",
+            {"id": 0, "url": 0, "published_headline": 0, "day_headline": 0},
+        )
+        dups_total = int(state.get("duplicates_removed_total", 0))
+        invalid_dates = int(state.get("rows_with_invalid_article_day", 0))
+    else:
+        # 1. Read
+        log(f"Reading {input_path}")
+        rows = read_tsv(input_path)
+        input_rows = len(rows)
+        log(f"Read {input_rows} rows")
+
+        # 2. Deduplicate
+        rows, removals = deduplicate(rows)
+        dups_total = sum(removals.values())
+        log(f"After dedup: {len(rows)} rows ({dups_total} duplicates removed)")
+
+        # 3. Sort
+        rows, invalid_dates = sort_rows(rows)
+        log(f"Sorted. Invalid article_day count: {invalid_dates}")
+
+        write_tsv(rows, prepared_path, fieldnames=INPUT_FIELDNAMES)
+        prepared_meta = {
+            "prepared_run_signature": run_signature,
+            "prepared_rows_path": prepared_path,
+            "input_rows": input_rows,
+            "duplicates_removed_total": dups_total,
+            "duplicates_removed_by_key_type": removals,
+            "rows_with_invalid_article_day": invalid_dates,
+            "rows_after_dedup": len(rows),
+            "prepared_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        write_run_state(state_path, {**state, **prepared_meta})
+        log(f"Wrote prepared rows to {prepared_path}")
 
     # Apply limit
     if limit > 0:
@@ -616,6 +732,8 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
             batch_size=batch_size,
             max_text_chars=max_text_chars,
             cache_path=cache_path,
+            state_path=state_path,
+            run_signature=run_signature,
         )
 
     # 8. Interpolate missing relevant-news days
@@ -651,6 +769,17 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
     }
     write_report(report_path, report)
     log(f"Report written to {report_path}")
+    write_run_state(
+        state_path,
+        {
+            **load_run_state(state_path),
+            **prepared_meta,
+            "prepared_run_signature": run_signature,
+            "last_report_path": report_path,
+            "last_output_path": output_path,
+            "last_finished_at_utc": finished_at,
+        },
+    )
 
     return report
 
