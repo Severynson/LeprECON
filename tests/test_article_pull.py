@@ -44,6 +44,30 @@ def test_extract_article_row_prefers_lead_paragraph() -> None:
     assert row["keywords"] == "economy | stocks"
 
 
+def test_extract_article_row_handles_null_keywords() -> None:
+    doc = {
+        "_id": "nyt://article/124",
+        "pub_date": "2025-01-10T08:30:00+0000",
+        "headline": {"main": "Headline"},
+        "keywords": None,
+    }
+
+    row = extract_article_row(doc, "")
+    assert row["keywords"] == ""
+
+
+def test_extract_article_row_handles_non_dict_headline() -> None:
+    doc = {
+        "_id": "nyt://article/125",
+        "pub_date": "2025-01-11T08:30:00+0000",
+        "headline": None,
+        "keywords": [],
+    }
+
+    row = extract_article_row(doc, "")
+    assert row["headline"] == ""
+
+
 def test_pull_articles_skips_existing_row_by_article_id(
     tmp_path: Path, monkeypatch
 ) -> None:
