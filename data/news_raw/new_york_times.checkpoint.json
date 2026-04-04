@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c1418307a069cb3ff99101ef8073704c936517e1364d65c221d57155fc970e3f
-size 89
+{
+  "current_date": "2015-09",
+  "next_page": 0,
+  "mode": "archive",
+  "query": "",
+  "start_date": "2015-01-01",
+  "end_date": "2026-04-04",
+  "output_path": "data/news_raw/new_york_times.tsv",
+  "updated_at": "2026-04-04T18:05:35Z"
+}

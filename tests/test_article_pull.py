@@ -6,6 +6,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.article_pull import extract_article_row
+from src.data.article_pull import load_checkpoint
 from src.data.article_pull import pull_articles
 from src.data.article_pull import load_env_value
 from src.data.article_pull import normalize_text
@@ -191,3 +192,17 @@ def test_pull_articles_ignores_mismatched_checkpoint_and_fetches_earlier_dates(
 
     assert rows_written == 0
     assert called_begin_dates == ["20150101"]
+
+
+def test_load_checkpoint_ignores_lfs_pointer_file(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(
+        (
+            "version https://git-lfs.github.com/spec/v1\n"
+            "oid sha256:deadbeef\n"
+            "size 89\n"
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_checkpoint(checkpoint_path) is None

@@ -237,7 +237,26 @@ def load_checkpoint(checkpoint_path: Path) -> PullCheckpoint | None:
     if not checkpoint_path.exists():
         return None
 
-    payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    raw_payload = checkpoint_path.read_text(encoding="utf-8").strip()
+    if not raw_payload:
+        log(
+            f"Checkpoint file is empty, ignoring checkpoint path={checkpoint_path}"
+        )
+        return None
+    if raw_payload.startswith("version https://git-lfs.github.com/spec/v1"):
+        log(
+            f"Checkpoint file is a Git LFS pointer, ignoring checkpoint path={checkpoint_path}"
+        )
+        return None
+
+    try:
+        payload = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        log(
+            f"Checkpoint file is invalid JSON, ignoring checkpoint path={checkpoint_path}"
+        )
+        return None
+
     return PullCheckpoint(
         current_date=payload["current_date"],
         next_page=int(payload["next_page"]),
@@ -289,7 +308,9 @@ def write_checkpoint(
         "output_path": output_path,
         "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
-    checkpoint_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path.replace(checkpoint_path)
 
 
 def clear_checkpoint(checkpoint_path: Path) -> None:
