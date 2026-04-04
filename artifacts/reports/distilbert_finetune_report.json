@@ -1,0 +1,56 @@
+{
+  "started_at_utc": "2026-04-04T23:39:32Z",
+  "finished_at_utc": "2026-04-04T23:42:08Z",
+  "model": "distilbert-base-uncased",
+  "seed": 42,
+  "dataset": {
+    "total_labels_cached": 13600,
+    "after_exclude_failures": 13350,
+    "matched_with_articles": 13350,
+    "before_balancing": {
+      "label_0": 8376,
+      "label_1": 4974
+    },
+    "after_balancing": {
+      "label_0": 4974,
+      "label_1": 4974
+    },
+    "train_size": 7958,
+    "val_size": 1990
+  },
+  "training": {
+    "epochs": 3,
+    "batch_size": 32,
+    "dataloader_workers": 0,
+    "learning_rate": 2e-05,
+    "weight_decay": 0.01,
+    "warmup_ratio": 0.1,
+    "use_amp": true,
+    "patience": 5,
+    "total_training_steps": 747,
+    "warmup_steps": 74
+  },
+  "metrics_per_epoch": [
+    {
+      "epoch": 1,
+      "train_loss": 0.3524716024896706,
+      "val_accuracy": 0.9090452261306533,
+      "val_f1": 0.9098156452416543
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.18106244318935288,
+      "val_accuracy": 0.9105527638190954,
+      "val_f1": 0.9077720207253887
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.11387213095124946,
+      "val_accuracy": 0.907035175879397,
+      "val_f1": 0.9043927648578811
+    }
+  ],
+  "best_checkpoint_epoch": 0,
+  "best_f1": 0.9098156452416543,
+  "model_dir": "artifacts/models/distilbert_relevance"
+}

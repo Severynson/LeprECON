@@ -1,3 +1,4 @@
 data/news_raw/** filter=lfs diff=lfs merge=lfs -text
 data/** filter=lfs diff=lfs merge=lfs -text
 data/news_raw/*.checkpoint.json -filter -diff -merge text
+artifacts/models/**/*.safetensors filter=lfs diff=lfs merge=lfs -text
