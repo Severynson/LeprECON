@@ -1,10 +1,10 @@
 {
-  "current_date": "2015-09",
+  "current_date": "2016-01",
   "next_page": 0,
   "mode": "archive",
   "query": "",
   "start_date": "2015-01-01",
   "end_date": "2026-04-04",
   "output_path": "data/news_raw/new_york_times.tsv",
-  "updated_at": "2026-04-04T18:05:35Z"
+  "updated_at": "2026-04-04T18:08:15Z"
 }
