@@ -85,6 +85,21 @@ python src/dataset_generation/label_with_distilbert.py configs/default_distilber
 3. Use DistilBERT to label the rest of your dataset at virtually no cost
 4. Cache both sets of labels separately for reproducibility
 
+## Check One Article Relevance
+
+Use this helper to inspect a specific NYT article and see whether BERT labeled it as relevant for stock-market analysis.
+
+```bash
+python3 helper/inspect_article_relevance.py "nyt://article/<ARTICLE_ID>"
+```
+
+Output includes:
+- article fields from `data/news_raw/new_york_times.tsv`
+- BERT label from `data/news_preprocessed/BERT_label_cache.jsonl`
+- relevance decision:
+  - `label=1` -> relevant
+  - `label=0` -> not relevant
+
 ## What Success Looks Like
 
 The project should produce:
