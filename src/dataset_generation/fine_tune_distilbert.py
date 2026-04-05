@@ -276,8 +276,11 @@ def train_epoch(
     optimizer: AdamW,
     scheduler: Any,
     device: str,
+    use_amp: bool = True,
 ) -> float:
-    """Run one training epoch."""
+    """Run one training epoch with optional mixed precision."""
+    import torch
+
     model.train()
     total_loss = 0.0
 
@@ -287,12 +290,23 @@ def train_epoch(
         labels = batch["labels"].to(device)
 
         optimizer.zero_grad()
-        outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-        )
-        loss = outputs.loss
+
+        if use_amp and device == "cuda":
+            with torch.amp.autocast("cuda"):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                )
+                loss = outputs.loss
+        else:
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+            loss = outputs.loss
+
         loss.backward()
         optimizer.step()
         scheduler.step()
@@ -357,12 +371,14 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
     use_fast_tokenizer = model_cfg.get("use_fast_tokenizer", False)
     local_files_only = model_cfg.get("local_files_only", False)
 
-    epochs = train_cfg.get("epochs", 3)
-    batch_size = train_cfg.get("batch_size", 32)
-    dataloader_workers = train_cfg.get("dataloader_workers", 0)
-    lr = train_cfg.get("learning_rate", 2.0e-5)
+    epochs = train_cfg.get("epochs", 50)  # Large epoch budget with early stopping
+    batch_size = train_cfg.get("batch_size", 128)  # Large batch for 93GB VRAM
+    dataloader_workers = train_cfg.get("dataloader_workers", 8)  # Leverage 128 CPU cores
+    lr = train_cfg.get("learning_rate", 3.0e-5)  # Scaled for larger batch size
     weight_decay = train_cfg.get("weight_decay", 0.01)
-    warmup_ratio = train_cfg.get("warmup_ratio", 0.1)
+    warmup_ratio = train_cfg.get("warmup_ratio", 0.05)  # Reduced warmup for large batches
+    use_amp = train_cfg.get("use_amp", True)  # Mixed precision for faster training
+    patience = train_cfg.get("patience", 5)  # Early stopping patience
 
     model_dir = artifact_cfg.get("model_dir", "artifacts/models/distilbert_relevance")
     report_path = artifact_cfg.get("report_path", "artifacts/reports/distilbert_finetune_report.json")
@@ -505,15 +521,17 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
         num_training_steps=total_steps,
     )
 
-    # 12. Training loop
+    # 12. Training loop with early stopping
     best_f1 = 0.0
     best_checkpoint = None
+    epochs_without_improvement = 0
 
     metrics_per_epoch = []
+    log(f"Training with batch_size={batch_size}, workers={dataloader_workers}, use_amp={use_amp}, patience={patience}")
     for epoch in range(epochs):
         log(f"Epoch {epoch + 1}/{epochs}")
 
-        train_loss = train_epoch(model, train_loader, optimizer, scheduler, device)
+        train_loss = train_epoch(model, train_loader, optimizer, scheduler, device, use_amp=use_amp)
         val_acc, val_f1 = eval_epoch(model, val_loader, device)
 
         metrics = {
@@ -529,10 +547,17 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
         if val_f1 > best_f1:
             best_f1 = val_f1
             best_checkpoint = epoch
+            epochs_without_improvement = 0
             Path(model_dir).mkdir(parents=True, exist_ok=True)
             model.save_pretrained(model_dir)
             tokenizer.save_pretrained(model_dir)
             log(f"  Saved best checkpoint (F1={val_f1:.4f})")
+        else:
+            epochs_without_improvement += 1
+            log(f"  No improvement. Epochs without improvement: {epochs_without_improvement}/{patience}")
+            if epochs_without_improvement >= patience:
+                log(f"Early stopping triggered after {epoch + 1} epochs (patience={patience})")
+                break
 
     finished_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -554,9 +579,12 @@ def run_pipeline(cfg: dict[str, Any]) -> dict[str, Any]:
         "training": {
             "epochs": epochs,
             "batch_size": batch_size,
+            "dataloader_workers": dataloader_workers,
             "learning_rate": lr,
             "weight_decay": weight_decay,
             "warmup_ratio": warmup_ratio,
+            "use_amp": use_amp,
+            "patience": patience,
             "total_training_steps": total_steps,
             "warmup_steps": warmup_steps,
         },

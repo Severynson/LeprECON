@@ -2,3 +2,6 @@ torch
 transformers
 pyyaml
 scikit-learn
+numpy
+pandas
+requests

@@ -1,39 +1,25 @@
 run:
-  name: default_dataset_generation
+  name: default_daily_summarization
+  dry_run: false
+  max_days: 0
+  env_file: .env
 
-sources:
-  article_files:
-    - data/news_raw/new_york_times.csv
-  summaries_file: data/preprocessed/summaries_v1.csv
-  market_file: data/market/sp500.csv
-
-date_range:
+data:
+  raw_articles_path: data/news_raw/new_york_times.tsv
+  bert_cache_path: data/news_preprocessed/BERT_label_cache.jsonl
+  daily_summary_output_path: data/news_preprocessed/daily_summaries.jsonl
+  sp500_path: data/SP500.csv
+  daily_summary_price_output_path: data/news_preprocessed/daily_summary_and_price.csv
+  report_path: data/news_preprocessed/daily_summarization_report.json
   start_date: 2015-01-01
   end_date: 2026-04-04
 
-alignment:
-  article_assignment: same_day
-  timezone: America/New_York
-
-features:
-  include_returns: true
-  include_technical_indicators: true
-  include_news_embeddings: true
-  include_article_count: true
-  include_has_news_indicator: true
-  include_macro_features: false
-
-news_embedding:
-  encoder_model: yiyanghkust/finbert-tone
-  pooling: mean
-  daily_aggregation: mean
-  empty_day_strategy: zero_vector_with_indicator
-
-targets:
-  regression: next_day_close
-  classification: next_day_direction
-
-outputs:
-  processed_dataset_path: data/preprocessed/v1.csv
-  daily_features_path: data/preprocessed/daily_features_v1.csv
-  sequence_dataset_path: data/preprocessed/sequences_v1.csv
+gemini:
+  model: gemini-2.0-flash
+  max_summary_tokens: 400
+  max_articles_per_day: 120
+  max_chars_per_article: 2000
+  parallel_workers: 4
+  timeout_seconds: 120
+  max_retries: 4
+  backoff_seconds: 2.0
