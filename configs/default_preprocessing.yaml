@@ -1,0 +1,19 @@
+run:
+  name: default_preprocessing
+  dry_run: false
+  limit: 0
+  reuse_prepared_rows: true
+
+paths:
+  input: data/news_raw/new_york_times.tsv
+  output: data/news_preprocessed/new_york_times_preprocessed.tsv
+  report: data/news_preprocessed/preprocessing_report.json
+  label_cache: data/news_preprocessed/gemini_label_cache.jsonl
+  prepared_rows: data/news_preprocessed/new_york_times_prepared.tsv
+  run_state: data/news_preprocessed/preprocessing_state.json
+  env_file: .env
+
+gemini:
+  model: gemini-3.1-flash-lite-preview
+  batch_size: 25
+  max_text_chars: 2000

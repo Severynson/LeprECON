@@ -97,11 +97,15 @@ def normalize_text(value: str | None) -> str:
 
 
 def build_article_text(doc: dict[str, Any]) -> str:
+    headline_block = doc.get("headline")
+    headline_main = (
+        headline_block.get("main", "") if isinstance(headline_block, dict) else ""
+    )
     candidates = [
         doc.get("lead_paragraph"),
         doc.get("snippet"),
         doc.get("abstract"),
-        doc.get("headline", {}).get("main"),
+        headline_main,
     ]
     for candidate in candidates:
         cleaned = normalize_text(candidate)
@@ -111,12 +115,23 @@ def build_article_text(doc: dict[str, Any]) -> str:
 
 
 def extract_keywords(doc: dict[str, Any]) -> str:
-    names = [item.get("value", "") for item in doc.get("keywords", [])]
+    raw_keywords = doc.get("keywords")
+    if not isinstance(raw_keywords, list):
+        return ""
+
+    names = [
+        item.get("value", "")
+        for item in raw_keywords
+        if isinstance(item, dict)
+    ]
     return " | ".join(filter(None, (normalize_text(name) for name in names)))
 
 
 def extract_article_row(doc: dict[str, Any], query: str) -> dict[str, str]:
-    headline = normalize_text(doc.get("headline", {}).get("main"))
+    headline_block = doc.get("headline")
+    headline = normalize_text(
+        headline_block.get("main", "") if isinstance(headline_block, dict) else ""
+    )
     snippet = normalize_text(doc.get("snippet"))
     abstract = normalize_text(doc.get("abstract"))
     lead_paragraph = normalize_text(doc.get("lead_paragraph"))

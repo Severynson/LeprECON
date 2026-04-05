@@ -8,8 +8,8 @@ sources:
   market_file: data/market/sp500.csv
 
 date_range:
-  start_date: 2018-10-01
-  end_date: 2025-12-31
+  start_date: 2015-01-01
+  end_date: 2026-04-04
 
 alignment:
   article_assignment: same_day

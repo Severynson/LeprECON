@@ -201,6 +201,9 @@ cython_debug/
 
 # Local pull progress checkpoint
 data/news_raw/*.checkpoint.json
+
+# Local Hugging Face cache artifacts
+artifacts/huggingface_cache/
 .cursorignore
 .cursorindexingignore
 

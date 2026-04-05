@@ -1,0 +1,15 @@
+run:
+  name: default_distilbert_inference
+
+data:
+  raw_articles_path: data/news_raw/new_york_times.tsv
+  gemini_cache_path: data/news_preprocessed/gemini_label_cache.jsonl
+  bert_cache_path: data/news_preprocessed/BERT_label_cache.jsonl
+  max_text_chars: 1000
+
+model:
+  model_dir: artifacts/models/distilbert_relevance
+  max_length: 512
+
+artifacts:
+  report_path: artifacts/reports/distilbert_inference_report.json

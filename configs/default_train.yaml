@@ -5,11 +5,11 @@ experiment:
 data:
   processed_dataset_path: data/preprocessed/v1.csv
   train_split:
-    start_date: 2018-10-01
+    start_date: 2015-01-01
     end_date: 2024-12-31
   test_split:
     start_date: 2025-01-01
-    end_date: 2025-12-31
+    end_date: 2026-04-04
 
 features:
   include_news_embeddings: true

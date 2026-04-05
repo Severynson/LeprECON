@@ -320,6 +320,39 @@ configs/
 - Write incremental checkpoints during long runs.
 - Persist raw article data to CSV.
 
+### Stage A.5: Article relevance classification
+
+Filter articles by economy/market relevance before downstream processing. Two parallel approaches:
+
+**Approach 1: Gemini-based classification** (reference/ground truth)
+- Use Google's Gemini API to classify each article as relevant (label=1) or not (label=0) to global economy / S&P 500
+- Cost: ~$0.05–$0.10 per 1M input tokens; expensive for 634k+ articles
+- Advantages: high-quality labels, can be used as ground truth or training labels
+- Limitations: API cost grows with dataset size; not suitable for continuous labeling of new articles
+
+**Approach 2: DistilBERT fine-tuning** (inference alternative)
+- Fine-tune DistilBERT on Gemini-labeled subset using binary classification
+- Train chronologically (80/20 split) to avoid future leakage
+- Balance classes via undersampling to handle Gemini's preference for label=0
+- Cost: one-time training, then cheap inference (~10ms per article on CPU)
+- Advantages: rapid inference, no API calls, can label entire new datasets
+- Limitations: accuracy depends on training set quality and diversity
+
+**Expected workflow:**
+1. Start with Gemini labels on a representative sample (e.g., first ~13k articles cached)
+2. Fine-tune DistilBERT on Gemini's labels
+3. Use fine-tuned DistilBERT to label remaining articles (both existing and future pulls)
+4. Cache DistilBERT labels separately (`BERT_label_cache.jsonl`) to avoid duplicate API calls
+5. Seed BERT cache with Gemini labels to preserve ground truth
+6. Switch to pure DistilBERT for new articles once model is validated
+
+**Implementation files:**
+- `src/models/DistilBERT.py`: model wrapper (load, inference)
+- `src/dataset_generation/fine_tune_distilbert.py`: training script (reads Gemini labels, fine-tunes, saves checkpoint)
+- `src/dataset_generation/label_with_distilbert.py`: inference script (loads checkpoint, applies to unlabeled articles, populates cache)
+- `configs/default_distilbert_finetune.yaml`: training config
+- `configs/default_distilbert_inference.yaml`: inference config
+
 ### Stage B: Text preprocessing
 
 - Clean article text.
